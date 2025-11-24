@@ -21,8 +21,12 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "stdio.h"
 #include "ssd1306.h"
 #include "e32.h"
+#include "e32_config.h"
+#include "gps_parser.h"
+#include "bt.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -43,6 +47,7 @@
 /* Private variables ---------------------------------------------------------*/
 I2C_HandleTypeDef hi2c1;
 
+UART_HandleTypeDef huart1;
 UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
@@ -54,6 +59,7 @@ void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_I2C1_Init(void);
 static void MX_USART2_UART_Init(void);
+static void MX_USART1_UART_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -94,21 +100,129 @@ int main(void)
   MX_GPIO_Init();
   MX_I2C1_Init();
   MX_USART2_UART_Init();
+  MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
-  E32_SetMode(E32_MODE_NORMAL);
-  HAL_UART_Receive_IT(&huart2, LoRa_RX_Buffer, 1);
+//  TestE32();
+//  uint8_t cfg[6];
 
+  // Запис дефолту
+//  E32_WriteDefaultConfig();
+
+  // Зчитування конфігурації
+//  E32_ReadConfig(cfg);
+//  printf("CFG: %02X %02X %02X %02X %02X %02X\n",
+//         cfg[0], cfg[1], cfg[2], cfg[3], cfg[4], cfg[5]);
+  E32_Init(&huart2);
+
+//  E32_RX_Init(&huart2);
+  uint32_t found_speed;
+  uint8_t cfg[6];
+
+//  while(E32_AutoDetectSpeed(&found_speed, cfg) != 0)
+//  {
+////      printf("E32 UART speed detected: %lu\n", found_speed);
+////      printf("CFG: %02X %02X %02X %02X %02X %02X\n",
+////             cfg[0], cfg[1], cfg[2], cfg[3], cfg[4], cfg[5]);
+//  }
+//  else
+//  {
+//      printf("ERROR: Could not detect UART speed!\n");
+//  }
+//  E32_RX_Init(&huart2);
+//  E32_SetMode(E32_MODE_NORMAL);
+//  uint8_t cfg[6];
+//  E32_GetConfiguration(cfg, 500000); // timeout 500 ms
+//  E32_EnableRSSI();
+//  HAL_UART_Receive_IT(&huart2, LoRa_RX_Buffer, 1);
+//  E32_SetMode(E32_MODE_NORMAL);
   ssd1306_init();
   ssd1306_clear();
   ssd1306_write_string(0, 0, "LoRa Receiver");
+  E32_RX_Init(&huart2);
+  BT_Init(&huart1);
+  srand(HAL_GetTick());
+
 
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-
+	char msg[128];
     while (1)
   {
+
+    	GPSPacket_t fake;
+
+		fake.lat   = rand_float(-90.0f, 90.0f);
+		fake.lon   = rand_float(-180.0f, 180.0f);
+		fake.alt   = rand_float(0.0f, 2000.0f);     // довільно
+		fake.speed = rand_float(0.0f, 120.0f);      // довільно
+
+		// Формуємо текст для передачі
+		char bt_msg[64];
+		snprintf(bt_msg, sizeof(bt_msg),
+				 "Lat=%.6f Lon=%.6f Alt=%.1f Speed=%.2f\n",
+				 fake.lat, fake.lon, fake.alt, fake.speed);
+
+		// Надсилаємо на Bluetooth
+		BT_Send(bt_msg);
+		HAL_Delay(2000);
+		continue;
+    	if (E32_RX_MessageReady())
+    	{
+    		E32_RX_GetMessage(msg, sizeof(msg));
+    		printf("RECEIVED: %s\n", msg);
+
+    		GPSPacket_t gps;
+
+    		if (GPS_Parse(msg, &gps))
+    		{
+    			printf("Lat=%.6f  Lon=%.6f  Alt=%.1f  Speed=%.2f\n",
+    				   gps.lat, gps.lon, gps.alt, gps.speed);
+    		}
+    		else
+    		{
+    			printf("Parse error!\n");
+    		}
+    		ssd1306_write_string(0, 0, "LoRa Receiver");char buf[32];
+
+    		if (GPS_Parse(msg, &gps))
+    		{
+    		    snprintf(buf, sizeof(buf), "Lat: %.6f", gps.lat);
+    		    ssd1306_write_string(0, 1, buf);
+
+    		    snprintf(buf, sizeof(buf), "Lon: %.6f", gps.lon);
+    		    ssd1306_write_string(0, 2, buf);
+
+    		    snprintf(buf, sizeof(buf), "Alt: %.1f m", gps.alt);
+    		    ssd1306_write_string(0, 3, buf);
+
+    		    snprintf(buf, sizeof(buf), "Spd: %.2f km/h", gps.speed);
+    		    ssd1306_write_string(0, 4, buf);
+    		}
+    		else
+    		{
+//    		    ssd1306_write_string(0, 0, "Parse error!");
+    			// Генеруємо випадкові координати
+				GPSPacket_t fake;
+
+				fake.lat   = rand_float(-90.0f, 90.0f);
+				fake.lon   = rand_float(-180.0f, 180.0f);
+				fake.alt   = rand_float(0.0f, 2000.0f);     // довільно
+				fake.speed = rand_float(0.0f, 120.0f);      // довільно
+
+				// Формуємо текст для передачі
+				char bt_msg[64];
+				snprintf(bt_msg, sizeof(bt_msg),
+						 "Lat=%.6f Lon=%.6f Alt=%.1f Speed=%.2f\n",
+						 fake.lat, fake.lon, fake.alt, fake.speed);
+
+				// Надсилаємо на Bluetooth
+				BT_Send(bt_msg);
+    		}
+
+    		// TODO: розбір GPS тут, якщо хочеш
+    	}
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -187,6 +301,39 @@ static void MX_I2C1_Init(void)
 }
 
 /**
+  * @brief USART1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_USART1_UART_Init(void)
+{
+
+  /* USER CODE BEGIN USART1_Init 0 */
+
+  /* USER CODE END USART1_Init 0 */
+
+  /* USER CODE BEGIN USART1_Init 1 */
+
+  /* USER CODE END USART1_Init 1 */
+  huart1.Instance = USART1;
+  huart1.Init.BaudRate = 9600;
+  huart1.Init.WordLength = UART_WORDLENGTH_8B;
+  huart1.Init.StopBits = UART_STOPBITS_1;
+  huart1.Init.Parity = UART_PARITY_NONE;
+  huart1.Init.Mode = UART_MODE_TX_RX;
+  huart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart1.Init.OverSampling = UART_OVERSAMPLING_16;
+  if (HAL_UART_Init(&huart1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN USART1_Init 2 */
+
+  /* USER CODE END USART1_Init 2 */
+
+}
+
+/**
   * @brief USART2 Initialization Function
   * @param None
   * @retval None
@@ -243,6 +390,12 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : PB14 */
+  GPIO_InitStruct.Pin = GPIO_PIN_14;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */

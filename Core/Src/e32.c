@@ -1,179 +1,143 @@
 #include "e32.h"
 #include <string.h>
+#include <stdio.h>
 
-uint8_t LoRa_RX_Buffer[64];
-char rx_line[RX_LINE_MAX];
-uint8_t rx_idx = 0;
+static UART_HandleTypeDef *E32_UART = NULL;
 
-// --- Встановлюємо режим модуля ---
+static void E32_WaitAUX(void)
+{
+    uint32_t start = HAL_GetTick();
+    while (HAL_GPIO_ReadPin(E32_AUX_PORT, E32_AUX_PIN) == GPIO_PIN_RESET)
+    {
+        if (HAL_GetTick() - start > 3000)
+            return;
+    }
+    HAL_Delay(5);
+}
+
+void E32_Init(UART_HandleTypeDef *uart)
+{
+    E32_UART = uart;
+}
+
 void E32_SetMode(E32_Mode mode)
 {
-    switch(mode)
-    {
+    switch(mode) {
         case E32_MODE_NORMAL:
             HAL_GPIO_WritePin(E32_M0_PORT, E32_M0_PIN, GPIO_PIN_RESET);
             HAL_GPIO_WritePin(E32_M1_PORT, E32_M1_PIN, GPIO_PIN_RESET);
             break;
+
         case E32_MODE_WAKEUP:
             HAL_GPIO_WritePin(E32_M0_PORT, E32_M0_PIN, GPIO_PIN_SET);
             HAL_GPIO_WritePin(E32_M1_PORT, E32_M1_PIN, GPIO_PIN_RESET);
             break;
+
         case E32_MODE_POWERDOWN:
             HAL_GPIO_WritePin(E32_M0_PORT, E32_M0_PIN, GPIO_PIN_RESET);
             HAL_GPIO_WritePin(E32_M1_PORT, E32_M1_PIN, GPIO_PIN_SET);
             break;
+
         case E32_MODE_PROGRAM:
             HAL_GPIO_WritePin(E32_M0_PORT, E32_M0_PIN, GPIO_PIN_SET);
             HAL_GPIO_WritePin(E32_M1_PORT, E32_M1_PIN, GPIO_PIN_SET);
             break;
     }
-    HAL_Delay(50); // даємо час на переключення режиму
+
+    HAL_Delay(40);
+    E32_WaitAUX();
 }
 
-// --- Перевірка готовності через AUX ---
-uint8_t E32_IsReady(void)
-{
-    return (HAL_GPIO_ReadPin(E32_AUX_PORT, E32_AUX_PIN) == GPIO_PIN_SET);
-}
-
-// --- Відправка рядка ---
 void E32_SendString(char *str)
 {
-    while(!E32_IsReady()) HAL_Delay(5);
-    HAL_UART_Transmit(&huart2, (uint8_t*)str, strlen(str), HAL_MAX_DELAY);
+    if (!E32_UART) return;
+    E32_WaitAUX();
+    HAL_UART_Transmit(E32_UART, (uint8_t*)str, strlen(str), HAL_MAX_DELAY);
 }
 
-// --- Відправка одного байта ---
 void E32_SendByte(uint8_t data)
 {
-    while(!E32_IsReady()) HAL_Delay(5);
-    HAL_UART_Transmit(&huart2, &data, 1, HAL_MAX_DELAY);
-}
-// Callback — викликається при кожному прийнятому байті
-uint8_t Packet[64];
-uint8_t idx = 0;
-
-
-void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
-{
-    if (huart->Instance == USART2)
-    {
-        uint8_t b = LoRa_RX_Buffer[0];
-
-        // Після завершення прийому рядка
-        if (b == '\n' || rx_idx >= RX_LINE_MAX-1)
-        {
-            rx_line[rx_idx] = 0;  // завершити рядок
-
-            char lat[16] = {0};
-            char lon[16] = {0};
-            char alt[16] = {0};
-            char speed[16] = {0};
-
-            // Пропускаємо перший символ, якщо він зайвий
-            char *p = rx_line;
-            if (rx_line[0] < '0' || rx_line[0] > '9') p++;
-
-            // Витягуємо числа з рядка, обрізаємо перед комою
-            sscanf(p, "Lat:%15[^,],Lon:%15[^,],Alt:%15[^,],Speed:%15s",
-                   lat, lon, alt, speed);
-
-            // Вивід на OLED, по рядках
-            ssd1306_clear();
-            ssd1306_write_string(0, 0, lat);
-            ssd1306_write_string(0, 2, lon);
-            ssd1306_write_string(0, 4, alt);
-            ssd1306_write_string(0, 6, speed);
-
-            rx_idx = 0;
-        }
-
-        else
-        {
-            rx_line[rx_idx++] = b;
-        }
-
-        HAL_UART_Receive_IT(&huart2, LoRa_RX_Buffer, 1);
-    }
+    if (!E32_UART) return;
+    E32_WaitAUX();
+    HAL_UART_Transmit(E32_UART, &data, 1, HAL_MAX_DELAY);
 }
 
-//void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
-//{
-//    if (huart->Instance == USART2)
-//    {
-//        uint8_t b = LoRa_RX_Buffer[0];
-//
-//        // Перевірка на кінець пакету (Packet Mode відправляє весь рядок як пакет)
-//        if (b == '\n' || rx_idx >= RX_LINE_MAX-1)
-//        {
-//            rx_line[rx_idx] = 0; // завершити рядок
-//
-//            char lat[16] = {0};
-//            char lon[16] = {0};
-//            char alt[16] = {0};
-//            char speed[16] = {0};
-//
-//            sscanf(rx_line, "Lat:%15[^,],Lon:%15[^,],Alt:%15[^,],Speed:%15s",
-//                   lat, lon, alt, speed);
-//
-//            // Читаємо RSSI
-//            uint8_t rssi = E32_ReadRSSI();
-//
-//            // OLED вивід
-//            ssd1306_clear();
-//            ssd1306_write_string(0, 0, lat);
-//            ssd1306_write_string(0, 2, lon);
-//            ssd1306_write_string(0, 4, alt);
-//            ssd1306_write_string(0, 6, speed);
-//
-//            char rssi_str[8];
-//            sprintf(rssi_str, "RSSI:%ddB", rssi);
-//            ssd1306_write_string(0, 7, rssi_str);
-//
-//            rx_idx = 0;
-//        }
-//        else
-//        {
-//            rx_line[rx_idx++] = b;
-//        }
-//
-//        HAL_UART_Receive_IT(&huart2, LoRa_RX_Buffer, 1);
-//    }
-//}
-//
-
-// -------------------------
-// OLED custom functions
-// -------------------------
-void oled_print_char(char c)
+uint8_t E32_IsBusy(void)
 {
-    static uint8_t x = 0;
-    static uint8_t y = 0;
-
-    // якщо дійшли до кінця рядка
-    if (x > 120) {
-        x = 0;
-        y += 8;
-        if (y > 56) {    // дисплей 128x64 → 8 рядків
-            y = 0;
-            ssd1306_clear();
-        }
-    }
-
-    char buf[2] = { c, 0 };
-    ssd1306_write_string(x, y, buf); // Вивести символ
-    x += 6; // ширина символа 5x8 + 1
+    return (HAL_GPIO_ReadPin(E32_AUX_PORT, E32_AUX_PIN) == GPIO_PIN_RESET);
 }
 
-
-
-uint8_t E32_ReadRSSI(void)
+void Check_AUX(void)
 {
-    uint8_t buffer[128];
-    int len = HAL_UART_Receive(&huart2, buffer, sizeof(buffer), 50);
-    if(len > 0)
-    {
-        return buffer[len-1]; // останній байт – RSSI
-    }
+    if (HAL_GPIO_ReadPin(E32_AUX_PORT, E32_AUX_PIN))
+        printf("AUX HIGH\n");
+    else
+        printf("AUX LOW\n");
+}
+
+// --------------------- CONFIG READ -----------------------
+
+int E32_GetConfiguration(uint8_t *out_buf, uint32_t timeout_ms)
+{
+    if (!E32_UART || !out_buf) return -1;
+
+    uint8_t cmd[3] = {0xC1,0xC1,0xC1};
+    uint8_t tmp[6];
+
+    E32_SetMode(E32_MODE_PROGRAM);
+
+    __HAL_UART_FLUSH_DRREGISTER(E32_UART);
+
+    HAL_UART_Transmit(E32_UART, cmd, 3, 50);
+
+    E32_WaitAUX();
+
+    if (HAL_UART_Receive(E32_UART, tmp, 6, timeout_ms) != HAL_OK)
+        return -2;
+
+    memcpy(out_buf, tmp, 6);
+
+    E32_SetMode(E32_MODE_NORMAL);
     return 0;
+}
+
+// --------------------- AUTO BAUD DETECT -----------------------
+
+static const uint32_t baud_list[] = {9600,115200,57600,38400,19200,4800,2400,1200};
+
+int E32_AutoDetectSpeed(uint32_t *speed_out, uint8_t *cfg_out)
+{
+    if (!E32_UART) return -10;
+
+    uint8_t buf[6];
+
+    // MODE 3
+    E32_SetMode(E32_MODE_PROGRAM);
+
+    for (int i = 0; i < sizeof(baud_list)/sizeof(baud_list[0]); i++)
+    {
+        uint32_t br = baud_list[i];
+
+        E32_UART->Init.BaudRate = br;
+        HAL_UART_Init(E32_UART);
+
+        uint8_t cmd[3] = {0xC1,0xC1,0xC1};
+        HAL_UART_Transmit(E32_UART, cmd, 3, 20);
+
+        if (HAL_UART_Receive(E32_UART, buf, 6, 40) == HAL_OK)
+        {
+            // примітивна валідація пакету
+            if ((buf[0] == 0xC0 || buf[0] == 0xC1) && buf[4] < 32)
+            {
+                if (speed_out) *speed_out = br;
+                if (cfg_out) memcpy(cfg_out, buf, 6);
+
+                E32_SetMode(E32_MODE_NORMAL);
+                return 0;
+            }
+        }
+    }
+
+    E32_SetMode(E32_MODE_NORMAL);
+    return -1; // не вдалося знайти швидкість
 }
